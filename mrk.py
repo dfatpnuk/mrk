@@ -1,6 +1,5 @@
 import sklearn
 import pandas as pd
-import random as rand
 import copy
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mutual_info_score
@@ -15,8 +14,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score
 
 import warnings
-
-warnings.filterwarnings("ignore", category=UserWarning, module="pgmpy")
+warnings.filterwarnings("ignore")
 
 class MRK():
 
@@ -163,7 +161,7 @@ class MRK():
 
         return best_candidate
         
-    def meg_scoring_function(self, array_of_structures, training_data, epochs=30, sample_size=200):  # Scores Bayesian Network structures against the real dataset.
+    def meg_scoring_function(self, array_of_structures, training_data, epochs=30, sample_size=1000):  # Scores Bayesian Network structures against the real dataset.
         """
         array_of_structures - An array of Bayesian Network objects to be scored.
         data - the training dataset to which each structure will be fit.
@@ -188,18 +186,6 @@ class MRK():
             array_of_scores.append(score)   # Populate the array of scores.
 
         return array_of_scores  # Returns the array of respective scores
-
-    def dummy_scoring_function(self, array_of_structures, data, epochs=30):
-        """
-        array_of_structures - An array of Bayesian Network objects to be scored.
-        data - the dataset to which each structure will be fit.
-        returns: An array of length n with respective scores.
-        """
-        n = len(array_of_structures) # n represents the number of structures to be scored.
-        array_of_scores = []    # Initialise empty array to house scores. 
-        for i in range(n):
-            array_of_scores.append(rand.random())
-        return array_of_scores  # Returns an array of respective scores
     
     def evaluate(self, X_synthetic, y_synthetic, X_real, y_real, epochs) -> float:
         """
@@ -234,6 +220,7 @@ def main(args): # Main function which iterates through the datasets to test the 
     Prints the results table to the terminal and to a .csv
     """
     if args.test:   # Runs in testing mode (reduces datasets to 1000 rows.)
+
         # Test using adult dataset from UCIML
         # adult = pd.read_csv('https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/adult-dm.csv')
         # df = adult.head(100)
@@ -253,30 +240,8 @@ def main(args): # Main function which iterates through the datasets to test the 
         X_train = df.drop('test_y', axis=1)
         y_train = df['test_y']
 
-
         mrk = MRK()
-
         mrk.fit(X_train, y_train)
-
-
-        # # 1. Create a test array of structures.
-        # some_other_model = BayesianNetwork([('test_X1', 'test_y'), ('test_X2', 'test_y'), ('test_X3', 'test_y')])
-        # some_other_model2 = BayesianNetwork([('test_X1', 'test_y'), ('test_X2', 'test_y'), ('test_X3', 'test_X2')])
-        # test_array_of_structures = []  # Initialise empty array to house structures.
-        # test_array_of_structures.append(naive_bayes_model)
-        # test_array_of_structures.append(some_other_model)
-        # test_array_of_structures.append(some_other_model2)
-        # print(f"Test array of structures: {test_array_of_structures}")
-
-
-        # # Test the scoring function. 
-        # array_of_scores = mrk.meg_scoring_function( test_array_of_structures)
-        # print(f"Array of scores: {array_of_scores}")
-        # Test k2_structure_learning() which should accept a dataframe and the target var name, and return a BayesianNetwork() object with the optimal structure. 
-        # optimal_structure = mrk.k2_structure_learning(df, 'test_y', naive_bayes_model)
-        # synthetic_data = optimal_structure.sample(10)
-
-        # print(synthetic_data)
 
     return
 

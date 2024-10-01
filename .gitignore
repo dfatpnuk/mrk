@@ -1,3 +1,4 @@
 *venv/
 .venv*
 venv_mrk/*
+.DS_Store

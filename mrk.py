@@ -13,6 +13,9 @@ from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, LabelEncoder
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score
 
+import sys
+sys.setrecursionlimit(10000)  # Increase recursion depth to allow for more structures to be evaluated.
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -39,7 +42,7 @@ class MRK():
         self.ordinal_encoder = OrdinalEncoder(dtype=int, handle_unknown='use_encoded_value', unknown_value=-1)
         self.label_encoder = LabelEncoder()
 
-    def fit(self, X, y, test_size=0.5): 
+    def fit(self, X, y, test_size=0.5, verbose=False): 
         """
         X - the independent variables.
         y - the dependent variable.
@@ -70,9 +73,14 @@ class MRK():
         nb_structure = self.naive_bayes()   # Step 1. Initialise Naive Bayes Structure.
         ordered_variables = self.ordered_vars()     # Step 2. Determine an initial ordering for the X variables.
 
+        if verbose: print(f"Ordered variable names: {ordered_variables}")
+
         self.model = self.k2_structure_learning(ordered_variables, nb_structure, max_parents=2)
-        print("Model has been fit.")
-        print(f"Structure Edges: {self.model.edges}")
+
+        if verbose:
+            print("Model has been fit.")
+            print(f"Structure Edges: {self.model.edges}")
+
         return self # Returns self: object (fitted model)
 
     def naive_bayes(self, data=None, target=None): # Initialise a BN with Naive Bayes. # Accepts the dataset and the target column, returns a Bayesian Network with Naive Bayes structure.
@@ -121,7 +129,7 @@ class MRK():
         #     "arithmetic_mean": lambda mi_score, var_1_entropy, var_2_entropy: 2 * mi_score/ (var_1_entropy + var_2_entropy)}q
         return var_score_dict
         
-    def k2_structure_learning(self, ordered_var_names, naive_bayes_bn, max_parents):    # Should accept the data and return the optimal structure as a Bayesian Network.
+    def k2_structure_learning(self, ordered_var_names, naive_bayes_bn, max_parents=2):    # Should accept the data and return the optimal structure as a Bayesian Network.
         """
         ordered_var_names - an ordered list of variable names. 
         max_parents - the maximum number of parents allowed for any independent variable. 
@@ -161,7 +169,7 @@ class MRK():
 
         return best_candidate
         
-    def meg_scoring_function(self, array_of_structures, training_data, epochs=30, sample_size=1000):  # Scores Bayesian Network structures against the real dataset.
+    def meg_scoring_function(self, array_of_structures, training_data, epochs=30, sample_size=100):  # Scores Bayesian Network structures against the real dataset.
         """
         array_of_structures - An array of Bayesian Network objects to be scored.
         data - the training dataset to which each structure will be fit.
@@ -224,6 +232,7 @@ def main(args): # Main function which iterates through the datasets to test the 
         # Test using adult dataset from UCIML
         # adult = pd.read_csv('https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/adult-dm.csv')
         # df = adult.head(100)
+        
         # X_train = df.drop('class', axis=1)
         # y_train = df['class']
 
@@ -241,7 +250,7 @@ def main(args): # Main function which iterates through the datasets to test the 
         y_train = df['test_y']
 
         mrk = MRK()
-        mrk.fit(X_train, y_train)
+        mrk.fit(X_train, y_train, verbose=True)
 
     return
 

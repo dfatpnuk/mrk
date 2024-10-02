@@ -1,23 +1,18 @@
-import sklearn
 import pandas as pd
-import copy
+import random as rand   # For dummy scoring
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mutual_info_score
 from pgmpy.models import BayesianNetwork
 from pgmpy.estimators import BayesianEstimator
 from pgmpy.sampling import BayesianModelSampling
+import warnings
+import logging
+import copy
 
-# For evaluate
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, LabelEncoder
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score
-
-import sys
-sys.setrecursionlimit(10000)  # Increase recursion depth to allow for more structures to be evaluated.
-
-import warnings
-warnings.filterwarnings("ignore")
 
 class MRK():
 
@@ -64,37 +59,39 @@ class MRK():
         y = pd.Series(self.label_encoder.fit_transform(y).astype(int), name=self.target_col_name)
 
         # Train Test Split
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=test_size, random_state=42) # try 50/50 split to make it less complex
 
         # Combine X y into train and test sets.
         self.train_data = pd.concat([self.X_train, self.y_train], axis=1)
         self.test_data = pd.concat([self.X_test, self.y_test], axis=1)
 
-        nb_structure = self.naive_bayes()   # Step 1. Initialise Naive Bayes Structure.
-        ordered_variables = self.ordered_vars()     # Step 2. Determine an initial ordering for the X variables.
+        # Step 1. Initialise Naive Bayes Structure.
+        nb_structure = self.naive_bayes()   
 
-        if verbose: print(f"Ordered variable names: {ordered_variables}")
+        # Step 2. Determine an initial ordering for the X variables.
+        ordered_variables = self.ordered_vars()     
 
+        # Step 3. Learn the best structure via K2 with the initial ordering and the naive bayes structure.
         self.model = self.k2_structure_learning(ordered_variables, nb_structure, max_parents=2)
 
         if verbose:
             print("Model has been fit.")
-            print(f"Structure Edges: {self.model.edges}")
+            print("--- Optimal Structure Edges ---")
+            for edge in self.model.edges:
+                print(f"{edge[0]} -> {edge[1]}")
 
-        return self # Returns self: object (fitted model)
+        return self
 
-    def naive_bayes(self, data=None, target=None): # Initialise a BN with Naive Bayes. # Accepts the dataset and the target column, returns a Bayesian Network with Naive Bayes structure.
+    def naive_bayes(self): # Initialise a Bayesian Network with a Naive Bayes structure.
         """
-        data - A dataset as a pandas dataframe
-        target - The target column name (Y)
         returns: A BayesianNetwork() object with a Naive Bayes structure.
         """
-        if data is None: data = self.train_data   # no need to pass in the data itself, it can just be the column names.
-        if target is None: target = self.target_col_name
-
-        dependent_vars = data.columns.drop(target)
-        edges = [(var, target) for var in dependent_vars]
-        model = BayesianNetwork(edges)
+        model = BayesianNetwork()
+        model.add_node(self.target_col_name)
+        model.add_nodes_from(self.variable_names)
+        
+        for variable in self.variable_names:
+            model.add_edge(self.target_col_name,variable)
 
         return model
     
@@ -126,7 +123,7 @@ class MRK():
         # normalization_methods = {
         #     "none": lambda mi_score: mi_score,
         #     "geometric_mean": lambda mi_score, var_1_entropy, var_2_entropy: mi_score / np.sqrt(var_1_entropy * var_2_entropy),
-        #     "arithmetic_mean": lambda mi_score, var_1_entropy, var_2_entropy: 2 * mi_score/ (var_1_entropy + var_2_entropy)}q
+        #     "arithmetic_mean": lambda mi_score, var_1_entropy, var_2_entropy: 2 * mi_score/ (var_1_entropy + var_2_entropy)}
         return var_score_dict
         
     def k2_structure_learning(self, ordered_var_names, naive_bayes_bn, max_parents=2):    # Should accept the data and return the optimal structure as a Bayesian Network.
@@ -172,28 +169,40 @@ class MRK():
     def meg_scoring_function(self, array_of_structures, training_data, epochs=30, sample_size=100):  # Scores Bayesian Network structures against the real dataset.
         """
         array_of_structures - An array of Bayesian Network objects to be scored.
-        data - the training dataset to which each structure will be fit.
+        training_data - the training dataset to which each structure will be fit.
         epochs - Number of epochs for evaluation (default 30).
         sample_size - how many instances to sample from each structure for evaluation
         Returns: An array of length n containing the respective score of each structure.
         """
         array_of_scores = []  # Initialise empty array to house scores. 
-
         for structure in array_of_structures:  # For each BN in the array fit (fit with the pgmpy) to the training dataset (try 50/50 split to make it less complex)
 
-            structure.fit(training_data, estimator=BayesianEstimator, prior_type='K2')  # Fit the training data to the structure 
+            structure.remove_cpds(*structure.get_cpds())
+
+            structure.fit(data=training_data, estimator=BayesianEstimator, prior_type="BDeu", equivalent_sample_size=10 )  # Fit the training data to the structure 
             sampler = BayesianModelSampling(structure)
             synthetic_data = sampler.forward_sample(sample_size)  # Generate synthetic data (can be pgmpy forward sampling method, or it can be GANBLR)
             
             # Split synthetic data into X and y
             synthetic_X = synthetic_data[self.variable_names] 
             synthetic_y = synthetic_data[self.target_col_name].astype(int)
-            
+
             # Evaluate synthetic data with TSTR logreg for 30 epochs
             score = self.evaluate(synthetic_X, synthetic_y, self.X_test, self.y_test, epochs=epochs)
             array_of_scores.append(score)   # Populate the array of scores.
 
-        return array_of_scores  # Returns the array of respective scores
+        return array_of_scores  # Returns an array of respective scores
+    
+    def dummy_scoring_function(self, array_of_structures, training_data, epochs=30, sample_size=100):
+        """
+        array_of_structures - An array of Bayesian Network objects to be scored.
+        returns: An array of length n with respective scores.
+        """
+        n = len(array_of_structures) # n represents the number of structures to be scored.
+        array_of_scores = []    # Initialise empty array to house scores. 
+        for i in range(n):
+            array_of_scores.append(rand.random())
+        return array_of_scores  # Returns an array of respective scores
     
     def evaluate(self, X_synthetic, y_synthetic, X_real, y_real, epochs) -> float:
         """
@@ -227,30 +236,20 @@ def main(args): # Main function which iterates through the datasets to test the 
     Main function which iterates through the datasets to test the model. 
     Prints the results table to the terminal and to a .csv
     """
-    if args.test:   # Runs in testing mode (reduces datasets to 1000 rows.)
+    logging.getLogger('tensorflow').setLevel(logging.ERROR)
+    logging.getLogger('pgmpy').setLevel(logging.ERROR)
+    warnings.filterwarnings("ignore")
 
-        # Test using adult dataset from UCIML
-        # adult = pd.read_csv('https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/adult-dm.csv')
-        # df = adult.head(100)
-        
-        # X_train = df.drop('class', axis=1)
-        # y_train = df['class']
+    # Test using a discretized version of the adult dataset from UCIML
+    df = pd.read_csv('https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/adult-dm.csv')
 
-        # Invent a toy dataset.
-        df = pd.DataFrame({
-            'test_X1': [0,1,2,3,0,1,2,3,4,3],
-            'test_X2': [0,2,2,3,1,2,3,2,1,4],
-            'test_X3': [1,2,2,3,1,2,3,2,4,2],
-            'test_X4': [0,9,8,7,8,7,6,8,9,7],
-            'test_y': [1,2,2,3,1,2,3,2,4,2]
-        })
+    if args.test:  df = df.head(1000)   # Runs in testing mode (reduces datasets to 1000 rows.)
 
-        # Test the fit function
-        X_train = df.drop('test_y', axis=1)
-        y_train = df['test_y']
+    X_train = df.drop('class', axis=1)
+    y_train = df['class']
 
-        mrk = MRK()
-        mrk.fit(X_train, y_train, verbose=True)
+    mrk = MRK()
+    mrk.fit(X_train, y_train, verbose=True)
 
     return
 

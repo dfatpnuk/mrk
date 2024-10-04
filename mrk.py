@@ -10,13 +10,19 @@ import logging
 import copy
 
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, LabelEncoder
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score
 
+# For tensorboard
+import torch
+from torch.utils.tensorboard import SummaryWriter
+
 class MRK():
 
-    def __init__(self, X = None, y = None):
+    def __init__(self, X = None, y = None, classifier='lr'):
         """
         self.X - the independent variables.
         self.y - the dependent variable.
@@ -25,6 +31,9 @@ class MRK():
         self.target_col_name - the name of the dependent variable (y)
         self.model - the fitted model.
         """
+        self.ordinal_encoder = OrdinalEncoder(dtype=int, handle_unknown='use_encoded_value', unknown_value=-1)
+        self.label_encoder = LabelEncoder()
+        self.writer = SummaryWriter() # Initialize the tensoroard writer
         self.X_train = None
         self.y_train = None
         self.X_test = None
@@ -34,8 +43,8 @@ class MRK():
         self.variable_names = None
         self.target_col_name = None
         self.model = None
-        self.ordinal_encoder = OrdinalEncoder(dtype=int, handle_unknown='use_encoded_value', unknown_value=-1)
-        self.label_encoder = LabelEncoder()
+        self.classifier = classifier
+        self.top_score = None
 
     def fit(self, X, y, test_size=0.5, verbose=False): 
         """
@@ -72,10 +81,11 @@ class MRK():
         ordered_variables = self.ordered_vars()     
 
         # Step 3. Learn the best structure via K2 with the initial ordering and the naive bayes structure.
-        self.model = self.k2_structure_learning(ordered_variables, nb_structure, max_parents=2)
+        self.model, self.top_score = self.k2_structure_learning(ordered_variables, nb_structure, max_parents=2)
 
         if verbose:
             print("Model has been fit.")
+            print(f"TSTR Score of the optimal structure {self.top_score}")
             print("--- Optimal Structure Edges ---")
             for edge in self.model.edges:
                 print(f"{edge[0]} -> {edge[1]}")
@@ -128,43 +138,50 @@ class MRK():
         
     def k2_structure_learning(self, ordered_var_names, naive_bayes_bn, max_parents=2):    # Should accept the data and return the optimal structure as a Bayesian Network.
         """
-        ordered_var_names - an ordered list of variable names. 
-        max_parents - the maximum number of parents allowed for any independent variable. 
+        ordered_var_names - an ordered list of variable names.
+        max_parents - the maximum number of parents allowed for any independent variable.
         naive_bayes_bn - a BayesianNetwork() object initialised with a Naive Bayes structure.
         """
         visited_vars = []
         best_candidate = copy.deepcopy(naive_bayes_bn) # Init the candidate as the Naive Bayes structure.
-        
+        best_candidate_score = self.meg_scoring_function([best_candidate], self.train_data)[0]
+        step = 0
+
         for child in ordered_var_names:   # Iterate through the variables in order.
             parents = []
-            current_score = self.meg_scoring_function([best_candidate], self.train_data)[0]  # Get the current score
             ok_to_proceed = True
             while len(parents) < max_parents and ok_to_proceed:  # Check if the max number of parents for the variable has been reached.
-                
+
                 candidate_structures = []   # Create empty arrays for candidate structures and candidate parents
                 candidate_parents = []
-                for parent in visited_vars: # Iterate through all the visited variables as candidate parents for the variable. 
+                for parent in visited_vars: # Iterate through all the visited variables as candidate parents for the variable.
                     if parent not in parents:
-                        new_candidate = copy.deepcopy(best_candidate)  
+                        new_candidate = copy.deepcopy(best_candidate)
                         new_candidate.add_edge(parent, child)
                         candidate_structures.append(new_candidate)  # Add the new structure to the candidate array.
                         candidate_parents.append(parent)
 
-                if not candidate_structures: break  # No candidates to consider
+                if not candidate_structures:
+                  break  # No candidates to consider
 
-                candidate_scores = self.meg_scoring_function(candidate_structures, self.train_data)
-                top_score_idx = candidate_scores.index(max(candidate_scores))   # Find the index of the max candidate score
+                else:
+                  candidate_scores = self.meg_scoring_function(candidate_structures, self.train_data)
+                  top_score_idx = candidate_scores.index(max(candidate_scores))   # Find the index of the max candidate score
 
-                if candidate_scores[top_score_idx] > current_score:
-                    current_score = candidate_scores[top_score_idx]  # Update the current score
-                    best_parent = candidate_parents[top_score_idx]
-                    parents.append(best_parent)  # Add the new parent to the parents list
-                    best_candidate = candidate_structures[top_score_idx]  # Update the best candidate structure
-                else: ok_to_proceed = False  # No improvement, exit the loop
+                  if candidate_scores[top_score_idx] > best_candidate_score:
+                      best_parent = candidate_parents[top_score_idx]
+                      parents.append(best_parent)  # Add the new parent to the parents list
+                      best_candidate = candidate_structures[top_score_idx]  # Update the best candidate structure
+                      best_candidate_score = candidate_scores[top_score_idx]   # Update the best candidate score
+
+                  else: ok_to_proceed = False  # No improvement, exit the loop
+
+                  step += 1  # Increment the step counter
+                  self.writer.add_scalar("TSTR Score", best_candidate_score, step)  # Log current score for the step
 
             visited_vars.append(child)  # Add the just visited child to the list of visited variables.
 
-        return best_candidate
+        return best_candidate, best_candidate_score
         
     def meg_scoring_function(self, array_of_structures, training_data, epochs=30, sample_size=100):  # Scores Bayesian Network structures against the real dataset.
         """
@@ -179,10 +196,12 @@ class MRK():
 
             structure.remove_cpds(*structure.get_cpds())
 
+            # incorporate meg here ->
             structure.fit(data=training_data, estimator=BayesianEstimator, prior_type="BDeu", equivalent_sample_size=10 )  # Fit the training data to the structure 
             sampler = BayesianModelSampling(structure)
             synthetic_data = sampler.forward_sample(sample_size)  # Generate synthetic data (can be pgmpy forward sampling method, or it can be GANBLR)
-            
+            ## <-
+
             # Split synthetic data into X and y
             synthetic_X = synthetic_data[self.variable_names] 
             synthetic_y = synthetic_data[self.target_col_name].astype(int)
@@ -204,24 +223,30 @@ class MRK():
             array_of_scores.append(rand.random())
         return array_of_scores  # Returns an array of respective scores
     
-    def evaluate(self, X_synthetic, y_synthetic, X_real, y_real, epochs) -> float:
+    def evaluate(self, X_synthetic, y_synthetic, X_real, y_real, epochs, model='lr') -> float:
         """
         X_synthetic - The X data to be evaluated (X)
         y_synthetic - The y data to be evaluated (y_pred)
         X_real - Dependent variables from the real dataset (X_test)
         y_real - Target variable from the real dataset (y_test)
         """
-        # Transform real dataset TODO: Ask Chris why do I need to do this. Commenting out as data has already been encoded...
-        # X_real = self.ordinal_encoder.transform(X_real)
-        # y_real = self.label_encoder.transform(y_real).astype(int)
+        eval_model = None
+
+        models = dict(
+            lr=LogisticRegression,
+            rf=RandomForestClassifier,
+            mlp=MLPClassifier)
+        
+        if model in models.keys():  eval_model = models[model]()
+        else: raise Exception("Invalid Arugument `model`, Should be one of ['lr', 'mlp', 'rf'], or a model class that have sklearn-style `fit` and `predict` method.")
 
         total_accuracy = 0  # Cumulative accuracy score
 
         for epoch in range(epochs):
             # Set up and train the model pipeline
             pipeline = Pipeline([
-                ('encoder', OneHotEncoder(categories='auto', handle_unknown='ignore')),  # Replaced _d.get_categories()  with 'auto'
-                ('model', LogisticRegression())])
+                ('encoder', OneHotEncoder(categories='auto', handle_unknown='ignore')), 
+                ('model',  eval_model)])
 
             pipeline.fit(X_synthetic, y_synthetic)
             pred = pipeline.predict(X_real) # Predict and return accuracy
@@ -230,6 +255,45 @@ class MRK():
             total_accuracy += accuracy
 
         return total_accuracy / epochs
+
+    def evaluation_report(self, structure=None, output_csv_path=None):
+        '''
+        Generates an evaluation report of self.model
+            structure - the model to be evaluated. Must be a fitted BayesianNetwork() object 
+            output_csv_path = Path to output the results table as .csv. If omitted, results are only printed to the terminal.
+        '''
+        if structure == None: structure = self.model
+
+        structure.remove_cpds(*structure.get_cpds())
+
+        # incorporate meg here ->
+        structure.fit(data=training_data, estimator=BayesianEstimator, prior_type="BDeu", equivalent_sample_size=10 )  # Fit the training data to the structure 
+        sampler = BayesianModelSampling(structure)
+        synthetic_data = sampler.forward_sample(sample_size)  # Generate synthetic data (can be pgmpy forward sampling method, or it can be GANBLR)
+        ## <-
+
+        # Split synthetic data into X and y
+        synthetic_X = synthetic_data[self.variable_names] 
+        synthetic_y = synthetic_data[self.target_col_name].astype(int)
+
+        # Evaluate synthetic data with TSTR logreg for 30 epochs
+        score = self.evaluate(synthetic_X, synthetic_y, self.X_test, self.y_test, epochs=30)
+        array_of_scores.append(score)   # Populate the array of scores.
+    
+        results_df = pd.DataFrame()
+        tstr_score = self.meg_scoring_function([self.model], self.train_data)[0]
+
+        return
+    
+    def results(self):
+        '''
+        Returns a df of the result from the run. 
+        '''
+        results_df = pd.DataFrame(columns=['Classifier', 'Value'])
+        results_df.loc[len(results_df)] = [self.classifier, self.top_score]
+
+        return results_df
+    
 
 def main(args): # Main function which iterates through the datasets to test the model. 
     """
@@ -247,12 +311,19 @@ def main(args): # Main function which iterates through the datasets to test the 
 
     X_train = df.drop('class', axis=1)
     y_train = df['class']
+    results_df = pd.DataFrame(columns=['Run', 'Classifier', 'Value'])
+    # Run 10 times and take the average result
+    for i in range(10):
+        mrk = MRK()
+        mrk.fit(X_train, y_train, verbose=True)
+        run_result = mrk.results()
+        run_result['Run'] = i
+        results_df = pd.concat([results_df, run_result], ignore_index=True)
 
-    mrk = MRK()
-    mrk.fit(X_train, y_train, verbose=True)
+    results_df.to_csv("AdultResults.csv")
+    # bash command to run the tensorboard : tensorboard --logdir runs
 
     return
-
 
 if __name__ == "__main__":
     import argparse

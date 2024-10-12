@@ -1,5 +1,6 @@
 import pandas as pd
 import random as rand   # For dummy scoring
+from datetime import datetime
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mutual_info_score
 from pgmpy.models import BayesianNetwork
@@ -22,7 +23,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 class MRK():
 
-    def __init__(self, X = None, y = None, classifier='lr'):
+    def __init__(self, X = None, y = None, max_parents = 2, classifier='lr'):
         """
         self.X - the independent variables.
         self.y - the dependent variable.
@@ -45,6 +46,7 @@ class MRK():
         self.model = None
         self.classifier = classifier
         self.top_score = None
+        self.max_parents = max_parents
 
     def fit(self, X, y, test_size=0.5, verbose=False): 
         """
@@ -81,14 +83,11 @@ class MRK():
         ordered_variables = self.ordered_vars()     
 
         # Step 3. Learn the best structure via K2 with the initial ordering and the naive bayes structure.
-        self.model, self.top_score = self.k2_structure_learning(ordered_variables, nb_structure, max_parents=2)
+        self.model, self.top_score = self.k2_structure_learning(ordered_variables, nb_structure)
 
         if verbose:
             print("Model has been fit.")
             print(f"TSTR Score of the optimal structure {self.top_score}")
-            print("--- Optimal Structure Edges ---")
-            for edge in self.model.edges:
-                print(f"{edge[0]} -> {edge[1]}")
 
         return self
 
@@ -136,12 +135,14 @@ class MRK():
         #     "arithmetic_mean": lambda mi_score, var_1_entropy, var_2_entropy: 2 * mi_score/ (var_1_entropy + var_2_entropy)}
         return var_score_dict
         
-    def k2_structure_learning(self, ordered_var_names, naive_bayes_bn, max_parents=2):    # Should accept the data and return the optimal structure as a Bayesian Network.
+    def k2_structure_learning(self, ordered_var_names, naive_bayes_bn):    # Should accept the data and return the optimal structure as a Bayesian Network.
         """
         ordered_var_names - an ordered list of variable names.
         max_parents - the maximum number of parents allowed for any independent variable.
         naive_bayes_bn - a BayesianNetwork() object initialised with a Naive Bayes structure.
         """
+        max_parents = self.max_parents
+
         visited_vars = []
         best_candidate = copy.deepcopy(naive_bayes_bn) # Init the candidate as the Naive Bayes structure.
         best_candidate_score = self.meg_scoring_function([best_candidate], self.train_data)[0]
@@ -183,7 +184,7 @@ class MRK():
 
         return best_candidate, best_candidate_score
         
-    def meg_scoring_function(self, array_of_structures, training_data, epochs=30, sample_size=100):  # Scores Bayesian Network structures against the real dataset.
+    def meg_scoring_function(self, array_of_structures, training_data, epochs=30, sample_size=None):  # Scores Bayesian Network structures against the real dataset.
         """
         array_of_structures - An array of Bayesian Network objects to be scored.
         training_data - the training dataset to which each structure will be fit.
@@ -191,6 +192,7 @@ class MRK():
         sample_size - how many instances to sample from each structure for evaluation
         Returns: An array of length n containing the respective score of each structure.
         """
+        if sample_size == None: sample_size = len(self.X_train)
         array_of_scores = []  # Initialise empty array to house scores. 
         for structure in array_of_structures:  # For each BN in the array fit (fit with the pgmpy) to the training dataset (try 50/50 split to make it less complex)
 
@@ -223,13 +225,47 @@ class MRK():
             array_of_scores.append(rand.random())
         return array_of_scores  # Returns an array of respective scores
     
-    def evaluate(self, X_synthetic, y_synthetic, X_real, y_real, epochs, model='lr') -> float:
+    def evaluate(self, X_synthetic, y_synthetic, X_real, y_real, epochs, model=None) -> float:
         """
         X_synthetic - The X data to be evaluated (X)
         y_synthetic - The y data to be evaluated (y_pred)
         X_real - Dependent variables from the real dataset (X_test)
         y_real - Target variable from the real dataset (y_test)
         """
+        eval_model = None
+
+        models = dict(
+            lr=LogisticRegression,
+            rf=RandomForestClassifier,
+            mlp=MLPClassifier)
+        if model == None:  model = self.classifier
+        if model in models.keys():  eval_model = models[model]()
+        else: raise Exception("Invalid Arugument `model`, Should be one of ['lr', 'mlp', 'rf'], or a model class that have sklearn-style `fit` and `predict` method.")
+
+        total_accuracy = 0  # Cumulative accuracy score
+
+        for epoch in range(epochs):
+            # Set up and train the model pipeline
+            pipeline = Pipeline([
+                ('encoder', OneHotEncoder(categories='auto', handle_unknown='ignore')), 
+                ('model',  eval_model)])
+
+            pipeline.fit(X_synthetic, y_synthetic)
+            pred = pipeline.predict(X_real) # Predict and return accuracy
+
+            accuracy = accuracy_score(y_real, pred)
+            total_accuracy += accuracy
+
+        return total_accuracy / epochs
+    
+    def evaluate_trtr(self, X_train, y_train, X_test, y_test, epochs, model=None) -> float:
+        """
+        X_train - Dependent variables from the training set
+        y_train - Target variable from the training set
+        X_test - Dependent variables from the test set
+        y_test - Target variable from the test set
+        """
+        if model == None:  model = self.classifier
         eval_model = None
 
         models = dict(
@@ -248,10 +284,10 @@ class MRK():
                 ('encoder', OneHotEncoder(categories='auto', handle_unknown='ignore')), 
                 ('model',  eval_model)])
 
-            pipeline.fit(X_synthetic, y_synthetic)
-            pred = pipeline.predict(X_real) # Predict and return accuracy
+            pipeline.fit(X_train, y_train)
+            pred = pipeline.predict(X_test) # Predict and return accuracy
 
-            accuracy = accuracy_score(y_real, pred)
+            accuracy = accuracy_score(y_test, pred)
             total_accuracy += accuracy
 
         return total_accuracy / epochs
@@ -287,10 +323,12 @@ class MRK():
     
     def results(self):
         '''
-        Returns a df of the result from the run. 
+        Returns a df of results from the run. 
         '''
-        results_df = pd.DataFrame(columns=['Classifier', 'Value'])
-        results_df.loc[len(results_df)] = [self.classifier, self.top_score]
+        trtr_accuracy = self.evaluate_trtr(self.X_train, self.y_train, self.X_test, self.y_test, epochs=10)
+
+        results_df = pd.DataFrame(columns=['Classifier','TRTR','TSTR','Edges'])
+        results_df.loc[len(results_df)] = [self.classifier, trtr_accuracy, self.top_score, self.model.edges()]
 
         return results_df
     
@@ -304,25 +342,156 @@ def main(args): # Main function which iterates through the datasets to test the 
     logging.getLogger('pgmpy').setLevel(logging.ERROR)
     warnings.filterwarnings("ignore")
 
-    # Test using a discretized version of the adult dataset from UCIML
-    df = pd.read_csv('https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/adult-dm.csv')
+    # ---- DEPRECATED ----
+    def adult(classifier='lr'):
+        df = pd.read_csv('https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/adult-dm.csv') # Discretized version of the adult dataset from UCIML
+        if args.test:  df = df.sample(n=1000)   # Runs in testing mode (reduces datasets to 1000 rows.)
 
-    if args.test:  df = df.head(1000)   # Runs in testing mode (reduces datasets to 1000 rows.)
+        X_train = df.drop('class', axis=1)
+        y_train = df['class']
+        results_df = pd.DataFrame(columns=['Run', 'Time Completed', 'Classifier','TRTR','TSTR','Edges'])
 
-    X_train = df.drop('class', axis=1)
-    y_train = df['class']
-    results_df = pd.DataFrame(columns=['Run', 'Classifier', 'Value'])
-    # Run 10 times and take the average result
-    for i in range(10):
-        mrk = MRK()
-        mrk.fit(X_train, y_train, verbose=True)
-        run_result = mrk.results()
-        run_result['Run'] = i
-        results_df = pd.concat([results_df, run_result], ignore_index=True)
+        for i in range(1, 11):  # Complete 10 runs
+            mrk = MRK(classifier=classifier)
+            mrk.fit(X_train, y_train, verbose=False)
+            run_result = mrk.results()
+            run_result['Run'] = i
+            run_result['Time Completed'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            results_df = pd.concat([results_df, run_result], ignore_index=True)
 
-    results_df.to_csv("AdultResults.csv")
-    # bash command to run the tensorboard : tensorboard --logdir runs
+        results_df.to_csv(f"results/Adult_{datetime.now().strftime('%Y_%m_%d_%H%M')}.csv")
+        results_tex1 = results_df[['Run', 'Time Completed', 'Classifier','TRTR','TSTR','Edges']]
+        results_tex = results_tex1.to_latex(index=False)
+        with open(f"results/Adult_{datetime.now().strftime('%Y_%m_%d_%H%M')}.tex", 'w') as f: f.write(results_tex)
 
+        trtr_mean = results_df['TRTR'].mean()
+        trtr_std_dev = results_df['TRTR'].std()
+        tstr_mean = results_df['TSTR'].mean()
+        tstr_std_dev = results_df['TSTR'].std()
+
+        aggregate_df = pd.DataFrame(columns=['Dataset', 'Classifier', 'TRTR Mean', 'TRTR StdDev', 'TSTR Mean', 'TSTR StdDev'])
+        aggregate_df.loc[len(aggregate_df)] = ['Adult', 'MLP', trtr_mean, trtr_std_dev, tstr_mean, tstr_std_dev]
+        aggregate_df.to_csv(f"results/Aggregate_Adult_{datetime.now().strftime('%Y_%m_%d_%H%M')}.csv")
+        
+        aggregate_tex = aggregate_df.to_latex(index=False)
+        with open(f"results/Adult_{datetime.now().strftime('%Y_%m_%d_%H%M')}.tex", 'w') as f: f.write(aggregate_tex)
+        return
+    def magic(classifier='lr'):
+        df = pd.read_csv('https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/magic.csv') # Discretized version of the adult dataset from UCIML https://github.com/chriszhangpodo/discretizedata
+        if args.test:  df = df.sample(n=1000)   # Runs in testing mode (reduces datasets to 1000 rows.)
+
+        X_train = df.drop('class', axis=1)
+        y_train = df['class']
+        results_df = pd.DataFrame(columns=['Run', 'Time Completed', 'Classifier','TRTR','TSTR','Edges'])
+
+        for i in range(1, 11):  # Complete 10 runs
+            mrk = MRK(classifier=classifier)
+            mrk.fit(X_train, y_train, verbose=False)
+            run_result = mrk.results()
+            run_result['Run'] = i
+            run_result['Time Completed'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            results_df = pd.concat([results_df, run_result], ignore_index=True)
+
+        results_df.to_csv(f"results/Magic_{datetime.now().strftime('%Y_%m_%d_%H%M')}.csv")
+        results_tex1 = results_df[['Run', 'Time Completed', 'Classifier','TRTR','TSTR','Edges']]
+        results_tex = results_tex1.to_latex(index=False)
+        with open(f"results/Magic_{datetime.now().strftime('%Y_%m_%d_%H%M')}.tex", 'w') as f: f.write(results_tex)
+
+        trtr_mean = results_df['TRTR'].mean()
+        trtr_std_dev = results_df['TRTR'].std()
+        tstr_mean = results_df['TSTR'].mean()
+        tstr_std_dev = results_df['TSTR'].std()
+
+        aggregate_df = pd.DataFrame(columns=['Dataset', 'Classifier', 'TRTR Mean', 'TRTR StdDev', 'TSTR Mean', 'TSTR StdDev'])
+        aggregate_df.loc[len(aggregate_df)] = ['Magic', classifier, trtr_mean, trtr_std_dev, tstr_mean, tstr_std_dev]
+        aggregate_df.to_csv(f"results/Aggregate_Magic_{datetime.now().strftime('%Y_%m_%d_%H%M')}.csv")
+        
+        aggregate_tex = aggregate_df.to_latex(index=False)
+        with open(f"results/Aggregate_Magic_{datetime.now().strftime('%Y_%m_%d_%H%M')}.tex", 'w') as f: f.write(aggregate_tex)
+        return
+    # --------
+
+    def complete_runs(dataset_name, df, classifier, max_parents):  # Completes 10 runs and outputs the results as csv
+        """
+        Completes 10 runs of the MRK Algorithm
+        Outputs the run results as a csv.
+        Returns: Aggregated results as a dict. Incl: TRTR accuracy, TRTR Std Dev, TSTR accuracy, TSTR Std Dev
+        """
+        X_train = df.drop('class', axis=1)
+        y_train = df['class']
+
+        # Prepare dataframe to store the result of each run. 
+        results_df = pd.DataFrame(columns=['Run', 'Time Completed', 'Classifier','TRTR','TSTR','Edges'])
+
+        for i in range(1, 11):  # Complete 10 runs
+            mrk = MRK(classifier=classifier, max_parents=max_parents)
+            mrk.fit(X_train, y_train, verbose=False)
+            run_result = mrk.results()
+            run_result['Run'] = i
+            run_result['Time Completed'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            results_df = pd.concat([results_df, run_result], ignore_index=True)
+
+        # Output the results of each run to csv.
+        results_df.to_csv(f"results/{dataset_name}_{datetime.now().strftime('%Y_%m_%d_%H%M')}.csv")
+        
+        # Aggregate the results
+        trtr_mean = results_df['TRTR'].mean()
+        trtr_std_dev = results_df['TRTR'].std()
+        tstr_mean = results_df['TSTR'].mean()
+        tstr_std_dev = results_df['TSTR'].std()
+        # Compile Aggregated Results into a dataframe
+        aggregate_dict = {
+            'TRTR Mean': trtr_mean,
+            'TRTR StdDev': trtr_std_dev,
+            'TSTR Mean': tstr_mean,
+            'TSTR StdDev':tstr_std_dev}
+
+        return aggregate_dict
+
+    def get_results_table(datasets=['adult'],classifiers=['lr'], max_parents=[2], istest=False):
+
+        dataset_dict = {'adult': 'https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/adult-dm.csv',  # Discretized version of the adult dataset
+                    'magic': 'https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/magic.csv',
+                    'breast': 'https://github.com/dfatpnuk/datasets/raw/refs/heads/main/wdbc.csv'
+                    }
+        
+        results_table = pd.DataFrame(columns=['Test','Dataset','Classifier','N_Instances','N_Features'])  # Initialise the results table
+        for dataset in datasets:
+            # Load the dataset.
+            df = pd.read_csv(dataset_dict[dataset])
+            if args.test:  df = df.sample(n=100)   # Runs in testing mode (reduces datasets to 1000 rows.)
+            n_rows = len(df)
+            n_cols = df.shape[1]
+
+            for classifier in classifiers:
+
+                for max in max_parents:
+                    new_row = {
+                        'Test': istest, 
+                        'Dataset': dataset,
+                        'Classifier': classifier,
+                        'N_Instances': n_rows,
+                        'N_Features': n_cols,
+                        'K2_Max_Parents': max
+                    }
+
+                    aggregated_results_dict = complete_runs(dataset, df, classifier, max) # Completes 10 runs on df using the current classifier.
+                    for key in aggregated_results_dict:
+                        new_row[key] = aggregated_results_dict[key]
+
+                    results_table = pd.concat([results_table, pd.DataFrame([new_row])], ignore_index=True)
+
+        # Output the final results table:
+        results_table.to_csv(f"results/{datetime.now().strftime('%Y_%m_%d_%H_%M')}_results_table") # Print the results table out to csv.
+        results_table_tex = results_table.to_latex(index=False, float_format="%.3f")
+        with open(f"results/{datetime.now().strftime('%Y_%m_%d_%H_%M')}_results_table.tex", 'w') as f: f.write(results_table_tex)
+        
+        print(results_table) # Display final table in the terminal. 
+        return
+    
+    get_results_table(datasets=['adult'],classifiers=['lr','mlp'], max_parents=[1,2], istest=args.test)
+
+    get_results_table(datasets=['magic'],classifiers=['lr','mlp'], max_parents=[1,2], istest=args.test)
     return
 
 if __name__ == "__main__":
@@ -333,3 +502,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     main(args)
+    # bash command to run the tensorboard : tensorboard --logdir runs

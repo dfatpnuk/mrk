@@ -291,35 +291,6 @@ class MRK():
             total_accuracy += accuracy
 
         return total_accuracy / epochs
-
-    # def evaluation_report(self, structure=None, output_csv_path=None):
-    #     '''
-    #     Generates an evaluation report of self.model
-    #         structure - the model to be evaluated. Must be a fitted BayesianNetwork() object 
-    #         output_csv_path = Path to output the results table as .csv. If omitted, results are only printed to the terminal.
-    #     '''
-    #     if structure == None: structure = self.model
-
-    #     structure.remove_cpds(*structure.get_cpds())
-
-    #     # incorporate meg here ->
-    #     structure.fit(data=training_data, estimator=BayesianEstimator, prior_type="BDeu", equivalent_sample_size=10 )  # Fit the training data to the structure 
-    #     sampler = BayesianModelSampling(structure)
-    #     synthetic_data = sampler.forward_sample(sample_size)  # Generate synthetic data (can be pgmpy forward sampling method, or it can be GANBLR)
-    #     ## <-
-
-    #     # Split synthetic data into X and y
-    #     synthetic_X = synthetic_data[self.variable_names] 
-    #     synthetic_y = synthetic_data[self.target_col_name].astype(int)
-
-    #     # Evaluate synthetic data with TSTR logreg for 30 epochs
-    #     score = self.evaluate(synthetic_X, synthetic_y, self.X_test, self.y_test, epochs=30)
-    #     array_of_scores.append(score)   # Populate the array of scores.
-    
-    #     results_df = pd.DataFrame()
-    #     tstr_score = self.meg_scoring_function([self.model], self.train_data)[0]
-
-    #     return
     
     def results(self):
         '''

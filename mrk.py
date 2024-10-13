@@ -383,7 +383,7 @@ def main(args): # Main function which iterates through the datasets to test the 
 
         dataset_dict = {'adult': 'https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/adult-dm.csv',  # Discretized version of the adult dataset
                     'magic': 'https://raw.githubusercontent.com/chriszhangpodo/discretizedata/main/magic.csv',
-                    'breast': 'https://github.com/dfatpnuk/datasets/raw/refs/heads/main/wdbc.csv'
+                    'breast': 'https://github.com/dfatpnuk/datasets/raw/refs/heads/main/wdbc_discretized.csv'
                     }
         
         results_table = pd.DataFrame(columns=['Test','Dataset','Classifier','N_Instances','N_Features'])  # Initialise the results table
@@ -423,6 +423,8 @@ def main(args): # Main function which iterates through the datasets to test the 
     get_results_table(datasets=['adult'],classifiers=['lr','mlp'], max_parents=[1,2], istest=args.test)
 
     get_results_table(datasets=['magic'],classifiers=['lr','mlp'], max_parents=[1,2], istest=args.test)
+
+    get_results_table(datasets=['breast'],classifiers=['lr','mlp'], max_parents=[1,2], istest=args.test)
     return
 
 if __name__ == "__main__":

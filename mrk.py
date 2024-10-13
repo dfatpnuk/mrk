@@ -47,6 +47,7 @@ class MRK():
         self.classifier = classifier
         self.top_score = None
         self.max_parents = max_parents
+        self.max_vars_visited = 10
 
     def fit(self, X, y, test_size=0.5, verbose=False): 
         """
@@ -142,6 +143,7 @@ class MRK():
         naive_bayes_bn - a BayesianNetwork() object initialised with a Naive Bayes structure.
         """
         max_parents = self.max_parents
+        max_vars_visited = self.max_vars_visited
 
         visited_vars = []
         best_candidate = copy.deepcopy(naive_bayes_bn) # Init the candidate as the Naive Bayes structure.
@@ -151,7 +153,7 @@ class MRK():
         for child in ordered_var_names:   # Iterate through the variables in order.
             parents = []
             ok_to_proceed = True
-            while len(parents) < max_parents and ok_to_proceed:  # Check if the max number of parents for the variable has been reached.
+            while len(parents) < max_parents and len(visited_vars) < max_vars_visited and ok_to_proceed:  # Check if the max number of parents for the variable has been reached.
 
                 candidate_structures = []   # Create empty arrays for candidate structures and candidate parents
                 candidate_parents = []
@@ -391,11 +393,12 @@ def main(args): # Main function which iterates through the datasets to test the 
         print(results_table) # Display final table in the terminal. 
         return
     
-    get_results_table(datasets=['adult'],classifiers=['lr','mlp'], max_parents=[1,2], istest=args.test)
-
-    get_results_table(datasets=['magic'],classifiers=['lr','mlp'], max_parents=[1,2], istest=args.test)
-
-    get_results_table(datasets=['breast'],classifiers=['lr','mlp'], max_parents=[1,2], istest=args.test)
+    get_results_table(datasets=['breast'],classifiers=['lr'], max_parents=[1,2], istest=args.test)
+    get_results_table(datasets=['adult'],classifiers=['lr'], max_parents=[1,2], istest=args.test)
+    get_results_table(datasets=['magic'],classifiers=['lr'], max_parents=[1,2], istest=args.test)
+    get_results_table(datasets=['breast'],classifiers=['mlp'], max_parents=[1,2], istest=args.test)
+    get_results_table(datasets=['adult'],classifiers=['mlp'], max_parents=[1,2], istest=args.test)
+    get_results_table(datasets=['magic'],classifiers=['mlp'], max_parents=[1,2], istest=args.test)
     return
 
 if __name__ == "__main__":
